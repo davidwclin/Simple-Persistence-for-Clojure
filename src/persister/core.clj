@@ -281,39 +281,37 @@ and returns sequence ([processed-number-accumulator joined-items-chunk]...)
 
 (defn- init-db*
   "Make sure to call it before any apply-transaction* call"
-  ([]
-     ;; set default change file time to 15 minutes, and transaction chunk size to 1000
-     (init-db* "database" (* 60 15) 1000))
-  ([data-directory file-change-interval transaction-chunk-size]
-     ;; create data directory if it does not exist
-     (let [data-dir (File. data-directory )]
-       (if (.exists data-dir)
-         (when-not
-             (.isDirectory data-dir)
-           (throw (RuntimeException. (str "\"" data-dir "\" must be a directory"))) )
-         (when-not
-             (.mkdir data-dir)
-           (throw (RuntimeException. (str "Can't create database directory \"" data-dir "\""))) )))
-
-     ;; initialize agent
-     (send writing-agent initialize-wr-agent data-directory file-change-interval)
-     ;; load transactions
-     (let [str-join-dosync (make-str-join-n transaction-chunk-size "(dosync\n" "\n" "\n)")]
-       (doseq [
-               journal-number (sort (journal-numbers data-directory))
-               [last-transaction-id chunk-to-load]
-               (str-join-dosync
-                (read-lines (str data-directory "/" journal-number ".journal"))
-                (dec journal-number))
-               ]
-         (load-string chunk-to-load)
-         (reset! transaction-counter last-transaction-id) )))) 
+  [data-directory file-change-interval transaction-chunk-size]
+  ;; create data directory if it does not exist
+  (let [data-dir (File. data-directory )]
+    (if (.exists data-dir)
+      (when-not
+        (.isDirectory data-dir)
+        (throw (RuntimeException. (str "\"" data-dir "\" must be a directory"))) )
+      (when-not
+        (.mkdir data-dir)
+        (throw (RuntimeException. (str "Can't create database directory \"" data-dir "\""))) )))
+  
+  ;; initialize agent
+  (send writing-agent initialize-wr-agent data-directory file-change-interval)
+  ;; load transactions
+  (let [str-join-dosync (make-str-join-n transaction-chunk-size "(dosync\n" "\n" "\n)")]
+    (doseq [
+            journal-number (sort (journal-numbers data-directory))
+            [last-transaction-id chunk-to-load]
+            (str-join-dosync
+              (read-lines (str data-directory "/" journal-number ".journal"))
+              (dec journal-number))
+            ]
+      (load-string chunk-to-load)
+      (reset! transaction-counter last-transaction-id) ))) 
   
 
 (defn init-db
   "Make sure to call it before any apply-transaction* call"
   [& {:keys [db-url data-directory file-change-interval transaction-chunk-size]}]
-  (cond 
-    db-url (sql/init-db db-url)
-    (and data-directory file-change-interval transaction-chunk-size) (init-db* data-directory file-change-interval transaction-chunk-size)
-    :else (init-db*)))
+  (if db-url 
+    (sql/init-db db-url)
+    (init-db* (or data-directory "database") 
+              (or file-change-interval (* 60 15))
+              (or transaction-chunk-size 1000))))
