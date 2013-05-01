@@ -1,6 +1,7 @@
 .classpath
 .project
 pom.xml
+pom.xml.asc
 *jar
 /target
 /lib/
