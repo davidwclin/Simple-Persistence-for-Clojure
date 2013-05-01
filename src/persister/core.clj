@@ -68,7 +68,11 @@ after they are put into agent queues
 
   (:import (java.io FileOutputStream File PrintWriter OutputStreamWriter
                     BufferedReader InputStreamReader FileInputStream))
-  (:require [clojure.string :as string]))
+  (:require [clojure.string :as string]
+            [persister.sql :as sql]))
+
+(def ^:private using-db?
+  (atom false))
 
 ;;; Temporaly adapted from deprecated clojure.contrib.duck-streams
 (defn read-lines
@@ -91,11 +95,11 @@ after they are put into agent queues
           :buffer-first-transaction-id 0}) )
 
 (def writing-agent (agent {
-                           :fos nil,
-                           :writer nil,
-                           :journal-creation-time nil,
-                           :directory "database"
-                           :file-change-interval 1000 }))
+                                     :fos nil,
+                                     :writer nil,
+                                     :journal-creation-time nil,
+                                     :directory "database"
+                                     :file-change-interval 1000 }))
 
 ;;; Used to check if there is an ongoing write operation (in this module)
 (def io-indicator-lock (java.util.concurrent.locks.ReentrantLock.) )
@@ -130,9 +134,17 @@ after they are put into agent queues
         )
       agent-state )))
 
+(defn- to-vec
+  "the serialization/deserialization is very weak with lists. You can't tell
+   if the list is a list or is a function call."
+  [x]
+  (if (seq? x)
+    (vec (map to-vec x))
+    x))
+
 (defn serialized-transaction
   [transaction-id & transaction-params]
-  (str "(" (string/join " " (map pr-str transaction-params)) ") ;" transaction-id) )
+  (str "(" (string/join " " (map (comp pr-str to-vec) transaction-params)) ") ;" transaction-id) )
 
 (declare try-flushing-smart-buffer)
 
@@ -198,15 +210,17 @@ after they are put into agent queues
     the possible loss at the expense of reduced throughput.
     Warning: do not mix the both macros in the same workflow!"
   [transaction-fn & transaction-fn-arg]
-  `(locking transaction-lock
-     (let [
-           res# (dosync (~transaction-fn ~@transaction-fn-arg))
-           transaction-id# (swap! transaction-counter inc)
-           ]
-       (persist-string-in-smart-buffer
-        (serialized-transaction transaction-id# '~transaction-fn ~@transaction-fn-arg)
-        transaction-id#)
-       res# )))
+  (if @using-db?
+    `(sql/apply-transaction transaction-fn ~@transaction-fn-arg) 
+    `(locking transaction-lock
+       (let [
+             res# (dosync (~transaction-fn ~@transaction-fn-arg))
+             transaction-id# (swap! transaction-counter inc)
+             ]
+         (persist-string-in-smart-buffer
+           (serialized-transaction transaction-id# '~transaction-fn ~@transaction-fn-arg)
+           transaction-id#)
+         res# ))))
 
 (defmacro apply-transaction-and-block
   "Apply transaction to the root object and block until it is flushed to disk.
@@ -217,6 +231,8 @@ after they are put into agent queues
     more transactions on account of disk failure.
     Warning: do not mix the both macros in the same workflow!"
   [transaction-fn & transaction-fn-arg]
+  (if @using-db?
+    (throw (UnsupportedOperationException. "")))
   `(locking transaction-lock
      (let [
            res# (dosync (~transaction-fn ~@transaction-fn-arg))
@@ -263,12 +279,11 @@ and returns sequence ([processed-number-accumulator joined-items-chunk]...)
            ]
           (joinn (drop n s) new-acc-size ) ))))))
 
-(defn init-db
+(defn- init-db*
   "Make sure to call it before any apply-transaction* call"
   ([]
      ;; set default change file time to 15 minutes, and transaction chunk size to 1000
-     (init-db "database" (* 60 15) 1000))
-
+     (init-db* "database" (* 60 15) 1000))
   ([data-directory file-change-interval transaction-chunk-size]
      ;; create data directory if it does not exist
      (let [data-dir (File. data-directory )]
@@ -292,4 +307,13 @@ and returns sequence ([processed-number-accumulator joined-items-chunk]...)
                 (dec journal-number))
                ]
          (load-string chunk-to-load)
-         (reset! transaction-counter last-transaction-id) ))))
+         (reset! transaction-counter last-transaction-id) )))) 
+  
+
+(defn init-db
+  "Make sure to call it before any apply-transaction* call"
+  [& {:keys [db-url data-directory file-change-interval transaction-chunk-size]}]
+  (cond 
+    db-url (sql/init-db db-url)
+    (and data-directory file-change-interval transaction-chunk-size) (init-db* data-directory file-change-interval transaction-chunk-size)
+    :else (init-db*)))

@@ -5,7 +5,7 @@
 (deftest test-serialized-transaction
   (is (=
        "(5 \"param\") ;1"
-       (serialized-transaction 1 5 "param") )))
+       (#'persister.core/serialized-transaction 1 5 "param") )))
 
 (deftest test-make-str-join-n
   (let [str-join-dosync (@#'persister.core/make-str-join-n 3 "(" "-" ")")]
