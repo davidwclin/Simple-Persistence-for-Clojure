@@ -6,9 +6,9 @@
 
 (def transaction-lock (java.util.concurrent.locks.ReentrantLock.))
 
-(def ^:private db-url* (atom nil))
+(def db-url* (atom nil))
 
-(defn ^:private to-vec
+(defn to-vec
   "the serialization/deserialization is very weak with lists. You can't tell
    if the list is a list or is a function call."
   [x]

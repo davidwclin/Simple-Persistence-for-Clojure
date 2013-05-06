@@ -71,7 +71,7 @@ after they are put into agent queues
   (:require [clojure.string :as string]
             [persister.sql :as sql]))
 
-(def ^:private using-db?
+(def using-db?
   (atom false))
 
 ;;; Temporaly adapted from deprecated clojure.contrib.duck-streams
@@ -210,17 +210,15 @@ after they are put into agent queues
     the possible loss at the expense of reduced throughput.
     Warning: do not mix the both macros in the same workflow!"
   [transaction-fn & transaction-fn-arg]
-  (if @using-db?
-    `(sql/apply-transaction transaction-fn ~@transaction-fn-arg) 
-    `(locking transaction-lock
-       (let [
-             res# (dosync (~transaction-fn ~@transaction-fn-arg))
-             transaction-id# (swap! transaction-counter inc)
-             ]
-         (persist-string-in-smart-buffer
-           (serialized-transaction transaction-id# '~transaction-fn ~@transaction-fn-arg)
-           transaction-id#)
-         res# ))))
+  `(if @using-db?
+    (sql/apply-transaction ~transaction-fn ~@transaction-fn-arg) 
+    (locking transaction-lock
+      (let [res# (dosync (~transaction-fn ~@transaction-fn-arg))
+            transaction-id# (swap! transaction-counter inc)]
+        (persist-string-in-smart-buffer
+          (serialized-transaction transaction-id# '~transaction-fn ~@transaction-fn-arg)
+          transaction-id#)
+        res# ))))
 
 (defmacro apply-transaction-and-block
   "Apply transaction to the root object and block until it is flushed to disk.
@@ -231,18 +229,16 @@ after they are put into agent queues
     more transactions on account of disk failure.
     Warning: do not mix the both macros in the same workflow!"
   [transaction-fn & transaction-fn-arg]
-  (if @using-db?
-    (throw (UnsupportedOperationException. "")))
-  `(locking transaction-lock
-     (let [
-           res# (dosync (~transaction-fn ~@transaction-fn-arg))
-           transaction-id# (swap! transaction-counter inc)
-           ]
-       (persist-string
-        (serialized-transaction transaction-id# '~transaction-fn ~@transaction-fn-arg)
-        transaction-id#)
-       (await writing-agent)
-       res# )))
+  `(if @using-db?
+     (throw (UnsupportedOperationException. ""))
+     (locking transaction-lock
+       (let [res# (dosync (~transaction-fn ~@transaction-fn-arg))
+             transaction-id# (swap! transaction-counter inc)]
+         (persist-string
+           (serialized-transaction transaction-id# '~transaction-fn ~@transaction-fn-arg)
+           transaction-id#)
+         (await writing-agent)
+         res# ))))
 
 (defn- initialize-wr-agent [agent-state data-directory file-change-interval-in-seconds]
   (assoc agent-state
@@ -311,7 +307,7 @@ and returns sequence ([processed-number-accumulator joined-items-chunk]...)
   "Make sure to call it before any apply-transaction* call"
   [& {:keys [db-url data-directory file-change-interval transaction-chunk-size]}]
   (if db-url 
-    (sql/init-db db-url)
+    (do (sql/init-db db-url) (reset! using-db? true))
     (init-db* (or data-directory "database") 
               (or file-change-interval (* 60 15))
               (or transaction-chunk-size 1000))))

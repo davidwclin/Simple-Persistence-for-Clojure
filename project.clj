@@ -1,4 +1,4 @@
-(defproject davidwclin/persister "0.0.1"
+(defproject davidwclin/persister "0.0.2"
   :description "Simple Persistence for Clojure"
   :url "https://github.com/davidwclin/Simple-Persistence-for-Clojure" 
   :dependencies [[org.clojure/clojure "1.4.0"]
